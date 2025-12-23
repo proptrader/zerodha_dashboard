@@ -1,0 +1,163 @@
+# Cursor Rules for ZD Dashboard (Zerodha Trading Dashboard)
+
+## Project Overview
+This is a Streamlit-based trading dashboard that integrates with Zerodha Kite API and Google Sheets for automated portfolio tracking and data synchronization.
+
+## Code Style & Standards
+
+### Python
+- Follow PEP 8 style guidelines
+- Use type hints where appropriate
+- Prefer f-strings for string formatting
+- Use descriptive variable names (e.g., `kite_api_key` not `key`)
+- Keep functions focused and single-purpose
+- Maximum line length: 100 characters
+
+### Streamlit Best Practices
+- Use `st.session_state` for maintaining state across reruns
+- Organize UI with `st.columns()` and `st.tabs()` for better layout
+- Use `st.expander()` for collapsible sections
+- Always provide user feedback with `st.success()`, `st.error()`, `st.warning()`, `st.info()`
+- Use `st.spinner()` for long-running operations
+- Prefer `st.dataframe()` over `st.write()` for DataFrames
+
+## Security & Credentials
+
+### API Keys & Tokens
+- NEVER commit API keys, access tokens, or credentials files to version control
+- Use environment variables or Streamlit secrets (`st.secrets`) for sensitive data
+- Use `type="password"` for all credential input fields
+- Validate credentials before using them
+- Handle authentication errors gracefully
+
+### Google Sheets Credentials
+- Store service account JSON files securely
+- Never hardcode credential paths
+- Use relative paths or environment variables
+
+## Error Handling
+
+- Always wrap API calls in try-except blocks
+- Provide meaningful error messages to users
+- Log errors appropriately (use session state for logs in Streamlit)
+- Handle edge cases (empty DataFrames, missing columns, network failures)
+- Validate inputs before processing
+
+## Data Processing
+
+### Pandas
+- Always check if DataFrames are empty before operations
+- Use `.empty` property to check DataFrame emptiness
+- Handle missing columns gracefully with `in` checks
+- Use appropriate data types (avoid mixed types in columns)
+
+### Kite API
+- Handle rate limits appropriately
+- Cache data when possible to reduce API calls
+- Validate API responses before processing
+- Handle token expiration and refresh logic
+
+## Code Organization
+
+### Function Structure
+- Keep functions small and focused (single responsibility)
+- Use docstrings for all functions (Google style)
+- Separate concerns: API calls, data processing, UI rendering
+- Group related functions together
+
+### File Structure
+- Keep helper functions at the top
+- Organize code sections with clear comments
+- Use consistent naming conventions
+- Separate configuration from logic
+
+## Threading & Background Tasks
+
+- Be cautious with threading in Streamlit (can cause issues with reruns)
+- Use `threading.Thread` for background tasks only when necessary
+- Ensure thread-safe operations when modifying session state
+- Document why threading is needed for specific operations
+
+## Testing & Validation
+
+- Test with empty data sets
+- Test with invalid credentials
+- Test with network failures
+- Validate user inputs before processing
+- Test scheduler functionality independently
+
+## Documentation
+
+- Add docstrings to all functions explaining purpose, parameters, and return values
+- Use inline comments for complex logic
+- Document API response structures
+- Keep README updated with setup instructions
+
+## Performance
+
+- Minimize API calls (cache when possible)
+- Use efficient pandas operations
+- Avoid unnecessary DataFrame copies
+- Optimize Google Sheets updates (batch when possible)
+
+## UI/UX Guidelines
+
+- Provide clear instructions for users
+- Show loading states for async operations
+- Use consistent iconography (📊, 📈, ⚙️, etc.)
+- Make error messages actionable
+- Provide fallback views when data is unavailable
+
+## Dependencies
+
+- Keep requirements.txt updated
+- Pin major versions for stability
+- Document why each dependency is needed
+- Use virtual environments
+
+## Common Patterns
+
+### Session State Initialization
+```python
+if 'key' not in st.session_state:
+    st.session_state['key'] = default_value
+```
+
+### Safe DataFrame Operations
+```python
+if not df.empty and 'column_name' in df.columns:
+    # Safe to proceed
+```
+
+### Error Handling Pattern
+```python
+try:
+    result = api_call()
+    if error_condition:
+        st.error("Meaningful error message")
+        return
+    # Process result
+except Exception as e:
+    st.error(f"Operation failed: {str(e)}")
+    log_error(e)
+```
+
+## When Adding New Features
+
+1. Check if similar functionality exists
+2. Follow existing code patterns
+3. Add appropriate error handling
+4. Update UI consistently
+5. Test with real and mock data
+6. Document new features
+
+## Code Review Checklist
+
+- [ ] No hardcoded credentials
+- [ ] Proper error handling
+- [ ] Empty data checks
+- [ ] User feedback provided
+- [ ] Code follows project patterns
+- [ ] Documentation added
+- [ ] Tested edge cases
+
