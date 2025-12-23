@@ -6,7 +6,6 @@ import schedule
 import threading
 from kiteconnect import KiteConnect
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import os
 import json
 
@@ -28,6 +27,8 @@ if 'authenticated_accounts' not in st.session_state:
     st.session_state['authenticated_accounts'] = {}
 if 'account_request_tokens' not in st.session_state:
     st.session_state['account_request_tokens'] = {}
+if 'auto_auth_attempted' not in st.session_state:
+    st.session_state['auto_auth_attempted'] = False
 
 # --- Helper Functions ---
 
@@ -47,13 +48,37 @@ def load_accounts_config():
         st.error(f"Error loading config.json: {str(e)}")
         return []
 
-def authenticate_account(account_config, user_request_token=None):
+def save_accounts_config(accounts):
+    """Save account configurations to config.json file."""
+    try:
+        with open('config.json', 'w') as f:
+            json.dump(accounts, f, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Error saving config.json: {str(e)}")
+        return False
+
+def update_account_access_token(account_id, access_token):
+    """Update access_token for a specific account in config.json and session state."""
+    accounts = st.session_state.get('accounts_config', [])
+    for account in accounts:
+        if account.get('account_id') == account_id:
+            account['access_token'] = access_token
+            if save_accounts_config(accounts):
+                # Update session state to keep it in sync
+                st.session_state['accounts_config'] = accounts
+                return True
+    return False
+
+def authenticate_account(account_config, user_request_token=None, try_access_token_first=True):
     """
     Authenticate a single account using KiteConnect.
+    First tries existing access_token, then falls back to request_token if needed.
     
     Args:
         account_config: Dictionary containing account configuration
         user_request_token: Optional request token provided by user
+        try_access_token_first: If True, try existing access_token first
     
     Returns:
         tuple: (kite_object, status_message) or (None, error_message)
@@ -69,6 +94,21 @@ def authenticate_account(account_config, user_request_token=None):
         # Create KiteConnect object
         kite = KiteConnect(api_key=api_key)
         
+        # First, try using existing access_token if available
+        if try_access_token_first:
+            existing_access_token = account_config.get('access_token', '')
+            if existing_access_token and existing_access_token.strip():
+                try:
+                    kite.set_access_token(existing_access_token)
+                    # Verify connection by fetching profile
+                    profile = kite.profile()
+                    # Access token is valid, return authenticated kite object
+                    return kite, f"Connected: {account_id} (using saved access_token)"
+                except Exception as e:
+                    # Access token is invalid/expired, continue to generate new one
+                    pass
+        
+        # Access token not available or invalid, generate new one using request_token
         # Determine which request_token to use
         request_token = user_request_token if user_request_token else account_config.get('request_token', '')
         
@@ -88,6 +128,9 @@ def authenticate_account(account_config, user_request_token=None):
         # Verify connection by fetching profile
         profile = kite.profile()
         
+        # Save access_token to config.json
+        update_account_access_token(account_id, access_token)
+        
         return kite, f"Connected: {account_id}"
         
     except Exception as e:
@@ -97,10 +140,8 @@ def authenticate_account(account_config, user_request_token=None):
 def load_google_sheet(json_key_path, sheet_name):
     """Connects to Google Sheets using Service Account."""
     try:
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_name(json_key_path, scope)
-        client = gspread.authorize(creds)
-        sheet = client.open(sheet_name)
+        gc = gspread.service_account(filename=json_key_path)
+        sheet = gc.open(sheet_name)
         return sheet
     except Exception as e:
         return str(e)
@@ -186,18 +227,48 @@ def update_spreadsheet_logic(creds_file, sheet_name):
     Core logic to fetch data from all authenticated accounts and update the sheet.
     Creates separate worksheets per account_id.
     """
+    # #region agent log
+    import json
+    try:
+        with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"dash.py:225","message":"update_spreadsheet_logic entry","data":{"creds_file":creds_file,"sheet_name":sheet_name,"auth_accounts_count":len(st.session_state.get('authenticated_accounts',{}))},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     log_msg = f"[{datetime.datetime.now()}] Starting automated data fetch..."
     st.session_state['last_run_log'].insert(0, log_msg)
     
     if not st.session_state['authenticated_accounts']:
+        # #region agent log
+        try:
+            with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"dash.py:234","message":"No authenticated accounts","data":{},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+        except: pass
+        # #endregion
         st.session_state['last_run_log'].insert(0, "No authenticated accounts to sync")
         return
     
     # Fetch data for all authenticated accounts
     accounts_data = get_all_accounts_data()
     
+    # #region agent log
+    try:
+        with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+            accounts_summary = {k: {"has_error":bool(v.get('error')),"holdings_shape":list(v.get('holdings',pd.DataFrame()).shape) if not v.get('holdings',pd.DataFrame()).empty else [0,0],"trades_shape":list(v.get('trades',pd.DataFrame()).shape) if not v.get('trades',pd.DataFrame()).empty else [0,0]} for k,v in accounts_data.items()}
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"dash.py:238","message":"accounts_data fetched","data":{"accounts_count":len(accounts_data),"accounts_summary":accounts_summary},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     # Connect to GSheets
     sheet_obj = load_google_sheet(creds_file, sheet_name)
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"dash.py:241","message":"Google Sheets connection result","data":{"is_error":isinstance(sheet_obj,str),"error_msg":sheet_obj if isinstance(sheet_obj,str) else "success","sheet_obj_type":str(type(sheet_obj))},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     if isinstance(sheet_obj, str):  # Error happened
         st.session_state['last_run_log'].insert(0, f"Error GSheets: {sheet_obj}")
         return
@@ -205,12 +276,26 @@ def update_spreadsheet_logic(creds_file, sheet_name):
     try:
         # Process each account's data
         for account_id, data in accounts_data.items():
+            # #region agent log
+            try:
+                with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"dash.py:248","message":"Processing account","data":{"account_id":account_id,"has_error":bool(data.get('error'))},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+            except: pass
+            # #endregion
+            
             if data.get('error'):
                 st.session_state['last_run_log'].insert(0, f"⚠️ Skipping {account_id}: {data['error']}")
                 continue
             
             df_holdings = data.get('holdings', pd.DataFrame())
             df_trades = data.get('trades', pd.DataFrame())
+            
+            # #region agent log
+            try:
+                with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"dash.py:255","message":"DataFrames before update","data":{"account_id":account_id,"holdings_empty":df_holdings.empty,"holdings_shape":list(df_holdings.shape),"trades_empty":df_trades.empty,"trades_shape":list(df_trades.shape)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+            except: pass
+            # #endregion
             
             # Create account-specific worksheet names
             holdings_ws_name = f"Holdings_{account_id}"
@@ -219,7 +304,19 @@ def update_spreadsheet_logic(creds_file, sheet_name):
             # Update Holdings Sheet for this account
             try:
                 ws_holdings = sheet_obj.worksheet(holdings_ws_name)
-            except:
+                # #region agent log
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"dash.py:262","message":"Holdings worksheet found","data":{"account_id":account_id,"worksheet_name":holdings_ws_name},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
+            except Exception as e:
+                # #region agent log
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"dash.py:264","message":"Creating holdings worksheet","data":{"account_id":account_id,"worksheet_name":holdings_ws_name,"error":str(e)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
                 ws_holdings = sheet_obj.add_worksheet(
                     title=holdings_ws_name, rows="100", cols="20"
                 )
@@ -229,10 +326,39 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                 if 'account_id' not in df_holdings.columns:
                     df_holdings['account_id'] = account_id
                 
+                # Convert complex objects to strings for Google Sheets compatibility
+                df_holdings_clean = df_holdings.copy()
+                for col in df_holdings_clean.columns:
+                    # Convert datetime objects to strings
+                    if df_holdings_clean[col].dtype == 'datetime64[ns]':
+                        df_holdings_clean[col] = df_holdings_clean[col].astype(str)
+                    # Convert object columns (may contain dicts, None, etc.) to strings
+                    elif df_holdings_clean[col].dtype == 'object':
+                        df_holdings_clean[col] = df_holdings_clean[col].apply(
+                            lambda x: str(x) if x is not None and not (isinstance(x, float) and pd.isna(x)) else ''
+                        )
+                    # Convert NaN values to empty strings
+                    df_holdings_clean[col] = df_holdings_clean[col].fillna('')
+                
+                # #region agent log
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run2","hypothesisId":"D","location":"dash.py:273","message":"Before holdings update (cleaned)","data":{"account_id":account_id,"rows":len(df_holdings_clean),"cols":len(df_holdings_clean.columns),"columns":list(df_holdings_clean.columns)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
+                
                 ws_holdings.clear()
-                ws_holdings.update(
-                    [df_holdings.columns.values.tolist()] + df_holdings.values.tolist()
+                update_result = ws_holdings.update(
+                    [df_holdings_clean.columns.values.tolist()] + df_holdings_clean.values.tolist()
                 )
+                
+                # #region agent log
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"dash.py:276","message":"Holdings update result","data":{"account_id":account_id,"update_result":str(update_result)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
+                
                 st.session_state['last_run_log'].insert(
                     0, f"✅ Holdings updated for {account_id}"
                 )
@@ -244,7 +370,19 @@ def update_spreadsheet_logic(creds_file, sheet_name):
             # Update Trades Sheet for this account
             try:
                 ws_trades = sheet_obj.worksheet(trades_ws_name)
-            except:
+                # #region agent log
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"dash.py:286","message":"Trades worksheet found","data":{"account_id":account_id,"worksheet_name":trades_ws_name},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
+            except Exception as e:
+                # #region agent log
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"dash.py:288","message":"Creating trades worksheet","data":{"account_id":account_id,"worksheet_name":trades_ws_name,"error":str(e)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
                 ws_trades = sheet_obj.add_worksheet(
                     title=trades_ws_name, rows="100", cols="20"
                 )
@@ -254,10 +392,39 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                 if 'account_id' not in df_trades.columns:
                     df_trades['account_id'] = account_id
                 
+                # Convert complex objects to strings for Google Sheets compatibility
+                df_trades_clean = df_trades.copy()
+                for col in df_trades_clean.columns:
+                    # Convert datetime objects to strings
+                    if df_trades_clean[col].dtype == 'datetime64[ns]':
+                        df_trades_clean[col] = df_trades_clean[col].astype(str)
+                    # Convert object columns (may contain dicts, None, etc.) to strings
+                    elif df_trades_clean[col].dtype == 'object':
+                        df_trades_clean[col] = df_trades_clean[col].apply(
+                            lambda x: str(x) if x is not None and not (isinstance(x, float) and pd.isna(x)) else ''
+                        )
+                    # Convert NaN values to empty strings
+                    df_trades_clean[col] = df_trades_clean[col].fillna('')
+                
+                # #region agent log
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run2","hypothesisId":"D","location":"dash.py:293","message":"Before trades update (cleaned)","data":{"account_id":account_id,"rows":len(df_trades_clean),"cols":len(df_trades_clean.columns),"columns":list(df_trades_clean.columns)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
+                
                 ws_trades.clear()
-                ws_trades.update(
-                    [df_trades.columns.values.tolist()] + df_trades.values.tolist()
+                update_result = ws_trades.update(
+                    [df_trades_clean.columns.values.tolist()] + df_trades_clean.values.tolist()
                 )
+                
+                # #region agent log
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"D","location":"dash.py:298","message":"Trades update result","data":{"account_id":account_id,"update_result":str(update_result)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
+                
                 st.session_state['last_run_log'].insert(
                     0, f"✅ Trades updated for {account_id}"
                 )
@@ -266,9 +433,22 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                     0, f"ℹ️ No trades data for {account_id}"
                 )
         
+        # #region agent log
+        try:
+            with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"E","location":"dash.py:310","message":"All accounts processed successfully","data":{},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
         st.session_state['last_run_log'].insert(0, "✅ All accounts synced successfully")
             
     except Exception as e:
+        # #region agent log
+        try:
+            with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"E","location":"dash.py:315","message":"Exception caught","data":{"error_type":type(e).__name__,"error_msg":str(e)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+        except: pass
+        # #endregion
         st.session_state['last_run_log'].insert(0, f"Error writing to sheet: {e}")
 
 # --- Background Scheduler ---
@@ -285,6 +465,30 @@ st.sidebar.header("⚙️ Configuration")
 # Load accounts config
 if not st.session_state['accounts_config']:
     st.session_state['accounts_config'] = load_accounts_config()
+
+# Auto-authenticate accounts with valid access_tokens on startup (only once)
+if not st.session_state['auto_auth_attempted'] and st.session_state['accounts_config']:
+    st.session_state['auto_auth_attempted'] = True
+    for account in st.session_state['accounts_config']:
+        account_id = account.get('account_id')
+        access_token = account.get('access_token', '')
+        
+        # Try to authenticate with existing access_token
+        if access_token and access_token.strip():
+            kite_obj, status_msg = authenticate_account(
+                account, 
+                try_access_token_first=True
+            )
+            if kite_obj:
+                st.session_state['authenticated_accounts'][account_id] = kite_obj
+                st.session_state['last_run_log'].insert(
+                    0, f"[{datetime.datetime.now()}] Auto-connected: {account_id}"
+                )
+            else:
+                # Access token invalid, log but don't show error (user can reconnect)
+                st.session_state['last_run_log'].insert(
+                    0, f"[{datetime.datetime.now()}] Auto-connect failed for {account_id}: {status_msg}"
+                )
 
 # Google Sheets Configuration
 with st.sidebar.expander("📊 Google Sheets", expanded=True):
@@ -342,7 +546,12 @@ with st.sidebar.expander("🔑 Account Management", expanded=True):
                     # Fall back to config token if user hasn't provided one
                     user_req_token = account.get('request_token', '')
                 
-                kite_obj, status_msg = authenticate_account(account, user_req_token)
+                # Always try access_token first; if it fails, use request_token
+                kite_obj, status_msg = authenticate_account(
+                    account, 
+                    user_req_token if user_req_token else None,
+                    try_access_token_first=True
+                )
                 
                 if kite_obj:
                     st.session_state['authenticated_accounts'][account_id] = kite_obj
@@ -518,8 +727,21 @@ if st.session_state['authenticated_accounts']:
                     st.divider()
             
             if st.button("Force Sync to Google Sheet Now"):
+                # #region agent log
+                import json
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"dash.py:590","message":"Force Sync button clicked","data":{"gsheet_json":gsheet_json,"gsheet_name":gsheet_name},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
                 with st.spinner("Uploading to Drive..."):
                     update_spreadsheet_logic(gsheet_json, gsheet_name)
+                # #region agent log
+                try:
+                    with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"dash.py:593","message":"Force Sync completed","data":{},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                except: pass
+                # #endregion
                 st.success("Manual Sync Complete!")
 
 else:
