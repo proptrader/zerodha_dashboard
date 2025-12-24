@@ -322,12 +322,35 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                 )
             
             if not df_holdings.empty:
-                # Ensure account_id column exists
-                if 'account_id' not in df_holdings.columns:
-                    df_holdings['account_id'] = account_id
+                # Filter Holdings to only include specified columns
+                # First, calculate combined quantity (quantity + collateral_quantity)
+                df_holdings_filtered = df_holdings.copy()
+                
+                # Calculate combined quantity, handling NaN values
+                if 'quantity' in df_holdings_filtered.columns and 'collateral_quantity' in df_holdings_filtered.columns:
+                    df_holdings_filtered['quantity'] = (
+                        df_holdings_filtered['quantity'].fillna(0) + 
+                        df_holdings_filtered['collateral_quantity'].fillna(0)
+                    )
+                elif 'quantity' in df_holdings_filtered.columns:
+                    df_holdings_filtered['quantity'] = df_holdings_filtered['quantity'].fillna(0)
+                elif 'collateral_quantity' in df_holdings_filtered.columns:
+                    df_holdings_filtered['quantity'] = df_holdings_filtered['collateral_quantity'].fillna(0)
+                
+                # Select only required columns
+                required_columns = ['tradingsymbol', 'quantity', 'average_price', 'close_price', 'pnl', 'day_change']
+                available_columns = [col for col in required_columns if col in df_holdings_filtered.columns]
+                
+                if available_columns:
+                    df_holdings_filtered = df_holdings_filtered[available_columns]
+                else:
+                    st.session_state['last_run_log'].insert(
+                        0, f"⚠️ No required columns found for {account_id} holdings"
+                    )
+                    continue
                 
                 # Convert complex objects to strings for Google Sheets compatibility
-                df_holdings_clean = df_holdings.copy()
+                df_holdings_clean = df_holdings_filtered.copy()
                 for col in df_holdings_clean.columns:
                     # Convert datetime objects to strings
                     if df_holdings_clean[col].dtype == 'datetime64[ns]':
