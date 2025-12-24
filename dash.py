@@ -170,6 +170,24 @@ def get_kite_data(kite):
     except Exception as e:
         return pd.DataFrame(), pd.DataFrame(), str(e)
 
+def get_account_margins(kite):
+    """
+    Fetches margin data (cash_balance and opening_balance) from Kite API.
+    
+    Args:
+        kite: Authenticated KiteConnect object
+    
+    Returns:
+        dict: {"cash_balance": value, "opening_balance": value} or None if error
+    """
+    try:
+        funds = kite.margins("equity")
+        cash_balance = funds.get("available", {}).get("cash", 0)
+        opening_balance = funds.get("available", {}).get("opening_balance", 0)
+        return {"cash_balance": cash_balance, "opening_balance": opening_balance}
+    except Exception as e:
+        return None
+
 def get_all_accounts_data():
     """
     Fetch data for all authenticated accounts.
@@ -337,8 +355,19 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                 elif 'collateral_quantity' in df_holdings_filtered.columns:
                     df_holdings_filtered['quantity'] = df_holdings_filtered['collateral_quantity'].fillna(0)
                 
+                # Calculate additional columns
+                if 'quantity' in df_holdings_filtered.columns and 'average_price' in df_holdings_filtered.columns:
+                    df_holdings_filtered['invested_amount'] = (
+                        df_holdings_filtered['quantity'] * df_holdings_filtered['average_price'].fillna(0)
+                    )
+                
+                if 'quantity' in df_holdings_filtered.columns and 'close_price' in df_holdings_filtered.columns:
+                    df_holdings_filtered['current_amount'] = (
+                        df_holdings_filtered['quantity'] * df_holdings_filtered['close_price'].fillna(0)
+                    )
+                
                 # Select only required columns
-                required_columns = ['tradingsymbol', 'quantity', 'average_price', 'close_price', 'pnl', 'day_change']
+                required_columns = ['tradingsymbol', 'quantity', 'average_price', 'close_price', 'pnl', 'day_change', 'invested_amount', 'current_amount']
                 available_columns = [col for col in required_columns if col in df_holdings_filtered.columns]
                 
                 if available_columns:
@@ -348,6 +377,40 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                         0, f"⚠️ No required columns found for {account_id} holdings"
                     )
                     continue
+                
+                # Fetch margins data and add cash_balance and opening_balance rows
+                kite_obj = st.session_state['authenticated_accounts'].get(account_id)
+                if kite_obj:
+                    margins_data = get_account_margins(kite_obj)
+                    if margins_data:
+                        # Create balance rows with same columns as filtered holdings
+                        balance_rows = []
+                        
+                        # Cash balance row
+                        cash_row = {}
+                        for col in available_columns:
+                            if col == 'tradingsymbol':
+                                cash_row[col] = 'cash_balance'
+                            elif col == 'current_amount':
+                                cash_row[col] = margins_data['cash_balance']
+                            else:
+                                cash_row[col] = 0
+                        balance_rows.append(cash_row)
+                        
+                        # Opening balance row
+                        opening_row = {}
+                        for col in available_columns:
+                            if col == 'tradingsymbol':
+                                opening_row[col] = 'opening_balance'
+                            elif col == 'current_amount':
+                                opening_row[col] = margins_data['opening_balance']
+                            else:
+                                opening_row[col] = 0
+                        balance_rows.append(opening_row)
+                        
+                        # Convert to DataFrame and append to holdings
+                        df_balance_rows = pd.DataFrame(balance_rows)
+                        df_holdings_filtered = pd.concat([df_holdings_filtered, df_balance_rows], ignore_index=True)
                 
                 # Convert complex objects to strings for Google Sheets compatibility
                 df_holdings_clean = df_holdings_filtered.copy()
