@@ -468,6 +468,12 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                             df_mf_holdings_filtered['quantity'] * df_mf_holdings_filtered['close_price'].fillna(0)
                         )
                     
+                    # Calculate P&L
+                    if 'current_amount' in df_mf_holdings_filtered.columns and 'invested_amount' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered['pnl'] = (
+                            df_mf_holdings_filtered['current_amount'] - df_mf_holdings_filtered['invested_amount']
+                        )
+                    
                     # Convert complex objects to strings for Google Sheets compatibility
                     df_mf_holdings_clean = df_mf_holdings_filtered.copy()
                     for col in df_mf_holdings_clean.columns:
@@ -547,6 +553,12 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                     if 'quantity' in df_mf_holdings_filtered.columns and 'close_price' in df_mf_holdings_filtered.columns:
                         df_mf_holdings_filtered['current_amount'] = (
                             df_mf_holdings_filtered['quantity'] * df_mf_holdings_filtered['close_price'].fillna(0)
+                        )
+                    
+                    # Calculate P&L
+                    if 'current_amount' in df_mf_holdings_filtered.columns and 'invested_amount' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered['pnl'] = (
+                            df_mf_holdings_filtered['current_amount'] - df_mf_holdings_filtered['invested_amount']
                         )
                     
                     # Convert complex objects to strings for Google Sheets compatibility
