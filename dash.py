@@ -154,7 +154,7 @@ def get_kite_data(kite):
         kite: Authenticated KiteConnect object
     
     Returns:
-        tuple: (df_holdings, df_trades, error_message)
+        tuple: (df_holdings, df_trades, df_mf_holdings, error_message)
     """
     try:
         # 1. Fetch Holdings (Equity & MF usually appear here if in Demat)
@@ -166,9 +166,13 @@ def get_kite_data(kite):
         trades = kite.trades()
         df_trades = pd.DataFrame(trades) if trades else pd.DataFrame()
         
-        return df_holdings, df_trades, None
+        # 3. Fetch Mutual Fund Holdings
+        mf_holdings = kite.mf_holdings()
+        df_mf_holdings = pd.DataFrame(mf_holdings) if mf_holdings else pd.DataFrame()
+        
+        return df_holdings, df_trades, df_mf_holdings, None
     except Exception as e:
-        return pd.DataFrame(), pd.DataFrame(), str(e)
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), str(e)
 
 def get_account_margins(kite):
     """
@@ -193,15 +197,16 @@ def get_all_accounts_data():
     Fetch data for all authenticated accounts.
     
     Returns:
-        dict: {account_id: {'holdings': df, 'trades': df, 'error': str}}
+        dict: {account_id: {'holdings': df, 'trades': df, 'mf_holdings': df, 'error': str}}
     """
     accounts_data = {}
     
     for account_id, kite in st.session_state['authenticated_accounts'].items():
-        holdings, trades, error = get_kite_data(kite)
+        holdings, trades, mf_holdings, error = get_kite_data(kite)
         accounts_data[account_id] = {
             'holdings': holdings,
             'trades': trades,
+            'mf_holdings': mf_holdings,
             'error': error
         }
     
@@ -209,16 +214,17 @@ def get_all_accounts_data():
 
 def aggregate_accounts_data(accounts_data):
     """
-    Aggregate holdings and trades from all accounts.
+    Aggregate holdings, trades, and MF holdings from all accounts.
     
     Args:
         accounts_data: Dict from get_all_accounts_data()
     
     Returns:
-        tuple: (aggregated_holdings_df, aggregated_trades_df)
+        tuple: (aggregated_holdings_df, aggregated_trades_df, aggregated_mf_holdings_df)
     """
     all_holdings = []
     all_trades = []
+    all_mf_holdings = []
     
     for account_id, data in accounts_data.items():
         if data.get('error'):
@@ -226,6 +232,7 @@ def aggregate_accounts_data(accounts_data):
             
         holdings = data.get('holdings', pd.DataFrame())
         trades = data.get('trades', pd.DataFrame())
+        mf_holdings = data.get('mf_holdings', pd.DataFrame())
         
         if not holdings.empty:
             holdings['account_id'] = account_id
@@ -234,11 +241,16 @@ def aggregate_accounts_data(accounts_data):
         if not trades.empty:
             trades['account_id'] = account_id
             all_trades.append(trades)
+        
+        if not mf_holdings.empty:
+            mf_holdings['account_id'] = account_id
+            all_mf_holdings.append(mf_holdings)
     
     aggregated_holdings = pd.concat(all_holdings, ignore_index=True) if all_holdings else pd.DataFrame()
     aggregated_trades = pd.concat(all_trades, ignore_index=True) if all_trades else pd.DataFrame()
+    aggregated_mf_holdings = pd.concat(all_mf_holdings, ignore_index=True) if all_mf_holdings else pd.DataFrame()
     
-    return aggregated_holdings, aggregated_trades
+    return aggregated_holdings, aggregated_trades, aggregated_mf_holdings
 
 def update_spreadsheet_logic(creds_file, sheet_name):
     """
@@ -307,6 +319,7 @@ def update_spreadsheet_logic(creds_file, sheet_name):
             
             df_holdings = data.get('holdings', pd.DataFrame())
             df_trades = data.get('trades', pd.DataFrame())
+            df_mf_holdings = data.get('mf_holdings', pd.DataFrame())
             
             # #region agent log
             try:
@@ -426,16 +439,51 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                     # Convert NaN values to empty strings
                     df_holdings_clean[col] = df_holdings_clean[col].fillna('')
                 
+                # Prepare MF holdings for export (exclude specified columns)
+                df_all_holdings = df_holdings_clean.copy()
+                if not df_mf_holdings.empty:
+                    # Filter out columns that should not be exported
+                    columns_to_exclude = ['folio', 'pnl', 'xirr', 'tradingsymbol', 'pledged_quantity', 'las_quantity', 'discrepancy', 'account_id']
+                    df_mf_holdings_filtered = df_mf_holdings.copy()
+                    # Remove excluded columns if they exist
+                    columns_to_keep = [col for col in df_mf_holdings_filtered.columns if col not in columns_to_exclude]
+                    df_mf_holdings_filtered = df_mf_holdings_filtered[columns_to_keep]
+                    
+                    # Convert complex objects to strings for Google Sheets compatibility
+                    df_mf_holdings_clean = df_mf_holdings_filtered.copy()
+                    for col in df_mf_holdings_clean.columns:
+                        # Convert datetime objects to strings
+                        if df_mf_holdings_clean[col].dtype == 'datetime64[ns]':
+                            df_mf_holdings_clean[col] = df_mf_holdings_clean[col].astype(str)
+                        # Convert object columns (may contain dicts, None, etc.) to strings
+                        elif df_mf_holdings_clean[col].dtype == 'object':
+                            df_mf_holdings_clean[col] = df_mf_holdings_clean[col].apply(
+                                lambda x: str(x) if x is not None and not (isinstance(x, float) and pd.isna(x)) else ''
+                            )
+                        # Convert NaN values to empty strings
+                        df_mf_holdings_clean[col] = df_mf_holdings_clean[col].fillna('')
+                    
+                    # Combine equity holdings and MF holdings
+                    # Align columns - add missing columns to each DataFrame with empty values
+                    all_columns = list(set(df_holdings_clean.columns.tolist() + df_mf_holdings_clean.columns.tolist()))
+                    
+                    # Reindex both DataFrames to have all columns
+                    df_holdings_aligned = df_holdings_clean.reindex(columns=all_columns, fill_value='')
+                    df_mf_aligned = df_mf_holdings_clean.reindex(columns=all_columns, fill_value='')
+                    
+                    # Concatenate equity holdings and MF holdings
+                    df_all_holdings = pd.concat([df_holdings_aligned, df_mf_aligned], ignore_index=True)
+                
                 # #region agent log
                 try:
                     with open(r'c:\Users\Ananth\Documents\GitHub\zerodha_dashboard\.cursor\debug.log', 'a') as f:
-                        f.write(json.dumps({"sessionId":"debug-session","runId":"run2","hypothesisId":"D","location":"dash.py:273","message":"Before holdings update (cleaned)","data":{"account_id":account_id,"rows":len(df_holdings_clean),"cols":len(df_holdings_clean.columns),"columns":list(df_holdings_clean.columns)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run2","hypothesisId":"D","location":"dash.py:273","message":"Before holdings update (cleaned)","data":{"account_id":account_id,"rows":len(df_all_holdings),"cols":len(df_all_holdings.columns),"columns":list(df_all_holdings.columns)},"timestamp":int(datetime.datetime.now().timestamp()*1000)}) + '\n')
                 except: pass
                 # #endregion
                 
                 ws_holdings.clear()
                 update_result = ws_holdings.update(
-                    [df_holdings_clean.columns.values.tolist()] + df_holdings_clean.values.tolist()
+                    [df_all_holdings.columns.values.tolist()] + df_all_holdings.values.tolist()
                 )
                 
                 # #region agent log
@@ -445,13 +493,50 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                 except: pass
                 # #endregion
                 
-                st.session_state['last_run_log'].insert(
-                    0, f"✅ Holdings updated for {account_id}"
-                )
+                if not df_mf_holdings.empty:
+                    st.session_state['last_run_log'].insert(
+                        0, f"✅ Holdings and MF Holdings updated for {account_id}"
+                    )
+                else:
+                    st.session_state['last_run_log'].insert(
+                        0, f"✅ Holdings updated for {account_id}"
+                    )
             else:
-                st.session_state['last_run_log'].insert(
-                    0, f"ℹ️ No holdings data for {account_id}"
-                )
+                # If no equity holdings, export only MF holdings if available
+                if not df_mf_holdings.empty:
+                    # Filter out columns that should not be exported
+                    columns_to_exclude = ['folio', 'pnl', 'xirr', 'tradingsymbol', 'pledged_quantity', 'last_quantity', 'discrepancy', 'account_id']
+                    df_mf_holdings_filtered = df_mf_holdings.copy()
+                    # Remove excluded columns if they exist
+                    columns_to_keep = [col for col in df_mf_holdings_filtered.columns if col not in columns_to_exclude]
+                    df_mf_holdings_filtered = df_mf_holdings_filtered[columns_to_keep]
+                    
+                    # Convert complex objects to strings for Google Sheets compatibility
+                    df_mf_holdings_clean = df_mf_holdings_filtered.copy()
+                    for col in df_mf_holdings_clean.columns:
+                        # Convert datetime objects to strings
+                        if df_mf_holdings_clean[col].dtype == 'datetime64[ns]':
+                            df_mf_holdings_clean[col] = df_mf_holdings_clean[col].astype(str)
+                        # Convert object columns (may contain dicts, None, etc.) to strings
+                        elif df_mf_holdings_clean[col].dtype == 'object':
+                            df_mf_holdings_clean[col] = df_mf_holdings_clean[col].apply(
+                                lambda x: str(x) if x is not None and not (isinstance(x, float) and pd.isna(x)) else ''
+                            )
+                        # Convert NaN values to empty strings
+                        df_mf_holdings_clean[col] = df_mf_holdings_clean[col].fillna('')
+                    
+                    ws_holdings.clear()
+                    ws_holdings.update(
+                        [df_mf_holdings_clean.columns.values.tolist()] + df_mf_holdings_clean.values.tolist()
+                    )
+                    
+                    st.session_state['last_run_log'].insert(
+                        0, f"✅ MF Holdings updated for {account_id}"
+                    )
+                else:
+                    st.session_state['last_run_log'].insert(
+                        0, f"ℹ️ No holdings data for {account_id}"
+                    )
 
             # Update Trades Sheet for this account
             try:
@@ -687,7 +772,7 @@ if st.session_state['authenticated_accounts']:
     accounts_data = get_all_accounts_data()
     
     # Aggregate data from all accounts
-    holdings, trades = aggregate_accounts_data(accounts_data)
+    holdings, trades, mf_holdings = aggregate_accounts_data(accounts_data)
     
     # Check for errors
     has_errors = any(data.get('error') for data in accounts_data.values())
@@ -787,6 +872,12 @@ if st.session_state['authenticated_accounts']:
                 else:
                     st.info("No holdings data available")
                 
+                st.subheader("Mutual Fund Holdings (All Accounts)")
+                if not mf_holdings.empty:
+                    st.dataframe(mf_holdings, width='stretch')
+                else:
+                    st.info("No mutual fund holdings data available")
+                
                 st.subheader("Trades (All Accounts)")
                 if not trades.empty:
                     st.dataframe(trades, width='stretch')
@@ -797,12 +888,19 @@ if st.session_state['authenticated_accounts']:
                     account_data = accounts_data.get(account_id, {})
                     account_holdings = account_data.get('holdings', pd.DataFrame())
                     account_trades = account_data.get('trades', pd.DataFrame())
+                    account_mf_holdings = account_data.get('mf_holdings', pd.DataFrame())
                     
                     st.subheader(f"Holdings - {account_id}")
                     if not account_holdings.empty:
                         st.dataframe(account_holdings, width='stretch')
                     else:
                         st.info(f"No holdings data for {account_id}")
+                    
+                    st.subheader(f"Mutual Fund Holdings - {account_id}")
+                    if not account_mf_holdings.empty:
+                        st.dataframe(account_mf_holdings, width='stretch')
+                    else:
+                        st.info(f"No mutual fund holdings data for {account_id}")
                     
                     st.subheader(f"Trades - {account_id}")
                     if not account_trades.empty:
