@@ -443,11 +443,30 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                 df_all_holdings = df_holdings_clean.copy()
                 if not df_mf_holdings.empty:
                     # Filter out columns that should not be exported
-                    columns_to_exclude = ['folio', 'pnl', 'xirr', 'tradingsymbol', 'pledged_quantity', 'las_quantity', 'discrepancy', 'account_id']
+                    columns_to_exclude = ['folio', 'pnl', 'xirr', 'tradingsymbol', 'pledged_quantity', 'las_quantity', 'last_price_date', 'discrepancy', 'account_id']
                     df_mf_holdings_filtered = df_mf_holdings.copy()
                     # Remove excluded columns if they exist
                     columns_to_keep = [col for col in df_mf_holdings_filtered.columns if col not in columns_to_exclude]
                     df_mf_holdings_filtered = df_mf_holdings_filtered[columns_to_keep]
+                    
+                    # Rename 'fund' column to 'tradingsymbol' if it exists
+                    if 'fund' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered = df_mf_holdings_filtered.rename(columns={'fund': 'tradingsymbol'})
+                    
+                    # Rename 'last_price' column to 'close_price' if it exists
+                    if 'last_price' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered = df_mf_holdings_filtered.rename(columns={'last_price': 'close_price'})
+                    
+                    # Calculate additional columns
+                    if 'quantity' in df_mf_holdings_filtered.columns and 'average_price' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered['invested_amount'] = (
+                            df_mf_holdings_filtered['quantity'] * df_mf_holdings_filtered['average_price'].fillna(0)
+                        )
+                    
+                    if 'quantity' in df_mf_holdings_filtered.columns and 'close_price' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered['current_amount'] = (
+                            df_mf_holdings_filtered['quantity'] * df_mf_holdings_filtered['close_price'].fillna(0)
+                        )
                     
                     # Convert complex objects to strings for Google Sheets compatibility
                     df_mf_holdings_clean = df_mf_holdings_filtered.copy()
@@ -510,6 +529,25 @@ def update_spreadsheet_logic(creds_file, sheet_name):
                     # Remove excluded columns if they exist
                     columns_to_keep = [col for col in df_mf_holdings_filtered.columns if col not in columns_to_exclude]
                     df_mf_holdings_filtered = df_mf_holdings_filtered[columns_to_keep]
+                    
+                    # Rename 'fund' column to 'tradingsymbol' if it exists
+                    if 'fund' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered = df_mf_holdings_filtered.rename(columns={'fund': 'tradingsymbol'})
+                    
+                    # Rename 'last_price' column to 'close_price' if it exists
+                    if 'last_price' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered = df_mf_holdings_filtered.rename(columns={'last_price': 'close_price'})
+                    
+                    # Calculate additional columns
+                    if 'quantity' in df_mf_holdings_filtered.columns and 'average_price' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered['invested_amount'] = (
+                            df_mf_holdings_filtered['quantity'] * df_mf_holdings_filtered['average_price'].fillna(0)
+                        )
+                    
+                    if 'quantity' in df_mf_holdings_filtered.columns and 'close_price' in df_mf_holdings_filtered.columns:
+                        df_mf_holdings_filtered['current_amount'] = (
+                            df_mf_holdings_filtered['quantity'] * df_mf_holdings_filtered['close_price'].fillna(0)
+                        )
                     
                     # Convert complex objects to strings for Google Sheets compatibility
                     df_mf_holdings_clean = df_mf_holdings_filtered.copy()
